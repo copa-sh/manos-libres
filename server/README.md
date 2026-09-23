@@ -61,7 +61,8 @@ debajo de API 34 se cae a HTTP/2 sobre TCP, que sirve igual para un GET en strea
 | Endpoint | Qué hace |
 |---|---|
 | `GET /salud` | Sin autenticar. Lo único que no la exige. |
-| `GET /v1/control` | SSE: `hello`, `session.list` y los despertares. |
+| `GET /v1/control` | SSE: `hello` (con el historial de chat), `session.list` y los despertares. |
+| `POST /v1/chat` | Manda un mensaje directo a tus otros dispositivos: `{text}`. |
 | `GET /v1/sesiones` | Lista de sesiones. |
 | `POST /v1/sesiones` | Abre una: `{cwd, title?}`. |
 | `GET /v1/sesiones/{id}/flujo` | SSE de la sesión. Reanuda con `Last-Event-ID` o `?desde=`. |

@@ -140,6 +140,10 @@ type Hello struct {
 	Sesiones  []InfoSesion `json:"sessions"`
 	// Reto a firmar con la clave del Keystore en el siguiente emparejamiento.
 	Reto string `json:"challenge,omitempty"`
+	// Los últimos mensajes de chat entre dispositivos. Buffer en anillo del nodo, igual que
+	// el replay de una sesión: quien se conecta no empieza a ciegas, y se pierde al
+	// reiniciar, a propósito (ver docs/07-decisiones.md §11).
+	Chat []*Chat `json:"chatHistory,omitempty"`
 }
 
 type ListaSesiones struct {
@@ -227,6 +231,23 @@ type TareaHecha struct {
 	Hablado    string  `json:"spoken"`
 	CosteUsd   float64 `json:"costUsd,omitempty"`
 	DuracionMs int64   `json:"durationMs,omitempty"`
+}
+
+// Chat es un mensaje directo entre dispositivos del mismo nodo, fuera de cualquier sesión de
+// agente. No lleva `sessionId`: viaja por el canal de control (`/v1/control`), que ya reciben
+// todos los dispositivos conectados, y no por el flujo de una sesión.
+//
+// No hay cifrado extremo a extremo por encima de TLS: el nodo ve el texto en claro, igual
+// que ve el resto del protocolo. Es una decisión, no un olvido — ver
+// docs/07-decisiones.md §11.
+type Chat struct {
+	cabecera
+	ChatID string `json:"chatId"`
+	// El dispositivo que lo mandó (`X-Dispositivo`), para que la app lo distinga de lo que
+	// escribió el propio dispositivo.
+	De      string `json:"from"`
+	Texto   string `json:"text"`
+	Enviado int64  `json:"sentAt"`
 }
 
 type ErrorFrame struct {

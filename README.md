@@ -68,7 +68,7 @@ credenciales OAuth del usuario del servidor. Por eso el nodo *envuelve un agente
 | [04-ux-manos-libres.md](docs/04-ux-manos-libres.md) | Las tres funciones en detalle, con los límites reales de Android |
 | [05-seguridad.md](docs/05-seguridad.md) | Emparejamiento, transporte, y por qué esto es ejecución remota de código |
 | [06-roadmap.md](docs/06-roadmap.md) | Hitos, del andamiaje al uso diario |
-| [07-decisiones.md](docs/07-decisiones.md) | Las diez cuestiones que quedaban abiertas, resueltas |
+| [07-decisiones.md](docs/07-decisiones.md) | Las diez cuestiones que quedaban abiertas, resueltas, más las añadidas después |
 | [08-tareas.md](docs/08-tareas.md) | Lo que falta por escribir, hito a hito |
 
 ## Estructura

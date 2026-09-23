@@ -9,8 +9,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 )
+
+// MaxChatBuffer es cuántos mensajes de chat conserva el nodo para quien se conecta después de
+// que se mandaran. En memoria y en anillo, igual que el replay de una sesión: se pierde al
+// reiniciar, a propósito.
+const MaxChatBuffer = 200
+
+// MaxChatTexto recorta un mensaje de chat. Es una conversación entre tus dispositivos, no un
+// documento; el mismo criterio que el `avisar` de la herramienta MCP, con más margen porque
+// aquí no hay TTS de por medio.
+const MaxChatTexto = 4000
 
 type Hub struct {
 	cfg Config
@@ -26,6 +38,11 @@ type Hub struct {
 
 	// Suscriptores del canal de control. Reciben `session.list` y los frames de despertar.
 	control map[Suscriptor]bool
+
+	chatMu     sync.Mutex
+	chatBuffer []*Chat
+	chatSeq    int64
+	sigChat    int
 }
 
 func NuevoHub(ctx context.Context, cfg Config) *Hub {
@@ -35,6 +52,7 @@ func NuevoHub(ctx context.Context, cfg Config) *Hub {
 		sesiones: map[string]*Sesion{},
 		sigID:    1,
 		control:  map[Suscriptor]bool{},
+		sigChat:  1,
 	}
 	// La sesión no conoce al hub; le pasamos por dónde difundir.
 	difundir = h.Difundir
@@ -124,6 +142,54 @@ func (h *Hub) Difundir(f Frame) {
 
 func (h *Hub) AnunciarLista() {
 	h.Difundir(&ListaSesiones{cabecera: cabecera{T: "session.list"}, Sesiones: h.Listar()})
+}
+
+// ── Chat entre dispositivos ─────────────────────────────────────────────────────────────
+//
+// Un mensaje directo entre tus dispositivos, fuera de cualquier sesión de agente. Vive en el
+// hub y no en una sesión porque no pertenece a ninguna: es del nodo. Se reparte por el mismo
+// canal de control que ya lleva `session.list` y los despertares — no es un canal aparte que
+// mantener — y se guarda en un buffer en anillo para que quien estaba desconectado lo reciba
+// en el siguiente `hello` (ver docs/07-decisiones.md §11).
+
+// EnviarChat manda un mensaje de un dispositivo a todos los demás. `dispositivo` es el
+// `X-Dispositivo` de quien lo manda; no hay verificación de que sea quien dice ser más allá
+// del token compartido — la misma confianza que ya existe para `by` en una decisión.
+func (h *Hub) EnviarChat(dispositivo, texto string) (*Chat, error) {
+	texto = strings.TrimSpace(texto)
+	if texto == "" {
+		return nil, fmt.Errorf("el mensaje está vacío")
+	}
+	texto = recortar(texto, MaxChatTexto)
+
+	h.chatMu.Lock()
+	id := h.sigChat
+	h.sigChat++
+	h.chatSeq++
+	c := &Chat{
+		cabecera: cabecera{T: "chat.message", S: h.chatSeq},
+		ChatID:   fmt.Sprintf("c_%d", id),
+		De:       dispositivo,
+		Texto:    texto,
+		Enviado:  time.Now().UnixMilli(),
+	}
+	h.chatBuffer = append(h.chatBuffer, c)
+	if len(h.chatBuffer) > MaxChatBuffer {
+		h.chatBuffer = h.chatBuffer[1:]
+	}
+	h.chatMu.Unlock()
+
+	h.Difundir(c)
+	return c, nil
+}
+
+// HistorialChat devuelve los últimos mensajes, en orden, para el `hello` de quien se conecta.
+func (h *Hub) HistorialChat() []*Chat {
+	h.chatMu.Lock()
+	defer h.chatMu.Unlock()
+	out := make([]*Chat, len(h.chatBuffer))
+	copy(out, h.chatBuffer)
+	return out
 }
 
 func (h *Hub) Cerrar() {

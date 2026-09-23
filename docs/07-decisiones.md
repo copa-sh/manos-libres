@@ -1,7 +1,7 @@
 # 7. Decisiones
 
-Las diez cuestiones que quedaban abiertas, ya resueltas. Cada punto dice qué se decidió y
-qué queda por hacer para que la decisión sea real.
+Las diez cuestiones que quedaban abiertas, ya resueltas, más las que se han ido añadiendo
+después. Cada punto dice qué se decidió y qué queda por hacer para que la decisión sea real.
 
 ---
 
@@ -144,3 +144,36 @@ estado corta («sigo, llevo doce minutos, tres ficheros tocados»). El nodo ya t
 información en los frames `tool`; es cuestión de resumirla en vez de narrarla en bruto.
 **Sigue sin fijar el valor por defecto de N** (¿tres minutos? ¿cinco?); se elige midiendo
 en H4, con el intervalo configurable desde el primer día.
+
+---
+
+### 11 · Chat entre tus dispositivos, por el canal de control
+
+Con varios dispositivos emparejados al mismo nodo (H6), hace falta coordinarse entre ellos
+sin pasar por el agente: «ya cogí yo esta sesión», «sigue tú desde el portátil». No es chat
+de propósito general con otras personas — eso sigue fuera de alcance
+([01-vision.md](01-vision.md#lo-que-esta-app-no-es)) — es una nota entre tú y tú mismo.
+
+**Decisión: un frame más en el canal que ya existe, no un sistema aparte.**
+
+- **Sin cifrado extremo a extremo por encima de TLS.** El nodo ya ve en claro el resto del
+  protocolo —lo que dice el agente, los prompts, las decisiones— porque es quien lanza el
+  agente y no puede evitarlo. Añadir E2E solo al chat protegería un mensaje («recuérdame
+  revisar el PR») mientras el nodo sigue viendo cosas bastante más sensibles al lado. La
+  superficie que hay que proteger es el transporte, y eso ya lo hace TLS 1.3
+  ([05-seguridad.md](05-seguridad.md#transporte)).
+- **Un solo nodo, un solo destinatario: todos tus dispositivos a la vez.** No hay concepto de
+  «para quién» el mensaje, porque no hay más gente en el nodo — sigue siendo
+  [un usuario por nodo](#2--un-usuario-por-nodo). Un mensaje de chat es una difusión a todo
+  el que esté escuchando el canal de control, igual que `session.list` o un `alert`.
+- **Buffer en anillo en memoria, como el replay de una sesión.** No hay tabla de mensajes ni
+  fichero: los últimos `MaxChatBuffer` viajan dentro del `hello` para que reconectar no
+  pierda lo que se dijo mientras estabas desconectado, y se pierden al reiniciar el nodo, a
+  propósito — el mismo criterio que ya se aplicó al [histórico de sesiones](#7--histórico-en-el-móvil-no-en-la-v1).
+- **Sin verificación de identidad del dispositivo, todavía.** `from` es el `X-Dispositivo` que
+  ya viaja en cada petición; no está firmado. Es la misma confianza que ya existe para el
+  `by` de una decisión resuelta, y se cierra el día que llegue el emparejamiento con
+  Ed25519 de H6 ([05-seguridad.md](05-seguridad.md#emparejamiento)).
+
+Detalle en [`server/hub.go`](../server/hub.go) (`EnviarChat`, `HistorialChat`) y
+[03-protocolo.md](03-protocolo.md#chatmessage--entre-tus-dispositivos-no-con-el-agente).

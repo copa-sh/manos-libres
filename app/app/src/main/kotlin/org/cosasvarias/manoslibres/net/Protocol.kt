@@ -115,6 +115,10 @@ sealed interface ClientFrame {
 
     @Serializable @SerialName("ping")
     data object Ping : ClientFrame
+
+    /** Un mensaje directo a tus otros dispositivos, fuera de cualquier sesión de agente. */
+    @Serializable @SerialName("chat")
+    data class Chat(val text: String) : ClientFrame
 }
 
 // ── Nodo → app ───────────────────────────────────────────────────────────────
@@ -128,6 +132,8 @@ sealed interface ServerFrame {
         val engines: List<String>,
         val sessions: List<SessionInfo>,
         val challenge: String? = null,
+        /** Los últimos mensajes de chat entre dispositivos. Buffer en anillo del nodo. */
+        val chatHistory: List<Chat> = emptyList(),
     ) : ServerFrame
 
     @Serializable @SerialName("session.list")
@@ -202,6 +208,23 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("pong")
     data object Pong : ServerFrame
+
+    /**
+     * Un mensaje directo entre tus dispositivos, fuera de cualquier sesión de agente. Viaja
+     * por el canal de control, no por el flujo de una sesión, así que no lleva `sessionId`.
+     *
+     * No hay cifrado extremo a extremo por encima de TLS: el nodo ve el texto en claro, igual
+     * que ve el resto del protocolo (ver docs/07-decisiones.md §11).
+     */
+    @Serializable @SerialName("chat.message")
+    data class Chat(
+        val seq: Long,
+        val chatId: String,
+        /** El dispositivo que lo mandó (`X-Dispositivo`). */
+        val from: String,
+        val text: String,
+        val sentAt: Long,
+    ) : ServerFrame
 }
 
 /** El `seq` del frame, o 0 si no pertenece a una sesión. */
@@ -216,5 +239,6 @@ val ServerFrame.seqOrZero: Long
         is ServerFrame.Alert -> seq
         is ServerFrame.TaskDone -> seq
         is ServerFrame.Error -> seq ?: 0
+        is ServerFrame.Chat -> seq
         else -> 0
     }

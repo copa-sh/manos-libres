@@ -37,6 +37,7 @@ documento explica el *porqué* de cada frame.
 | `interrupt` | `sessionId` | Parar el turno en curso. |
 | `narration` | `sessionId`, `at:{messageId, sentence}` | Dónde va la narración. |
 | `ping` | — | Latido; el cliente lo manda cada 20 s. |
+| `chat` | `text` | Mandar un mensaje directo a tus otros dispositivos, fuera de cualquier sesión. |
 
 `narration` no es telemetría decorativa: es lo que permite que, tras reconectar o tras un
 reconectar, el nodo sepa qué ha oído ya el usuario y qué debe volver a narrar.
@@ -45,7 +46,7 @@ reconectar, el nodo sepa qué ha oído ya el usuario y qué debe volver a narrar
 
 | `t` | Campos | Para qué |
 |---|---|---|
-| `hello` | `protocol`, `node`, `engines[]`, `sessions[]` | Respuesta a `auth`. Incluye qué motores hay disponibles. |
+| `hello` | `protocol`, `node`, `engines[]`, `sessions[]`, `chatHistory[]` | Respuesta a `auth`. Incluye qué motores hay disponibles y los últimos mensajes de chat. |
 | `session.list` | `sessions[]` | Inventario. |
 | `session.state` | `state`, `detail?` | `idle` · `thinking` · `working` · `waiting` · `error`. Único frame que la app usa para decidir si «está pasando algo». |
 | `text.delta` | `messageId`, `text` | Texto en streaming, **solo para la pantalla**. Nunca se narra. |
@@ -57,6 +58,7 @@ reconectar, el nodo sepa qué ha oído ya el usuario y qué debe volver a narrar
 | `task.done` | `summary`, `spoken`, `costUsd?`, `durationMs?` | Fin de turno. Genera aviso siempre. |
 | `error` | `code`, `message` | Fallo recuperable o fatal. |
 | `pong` | — | Latido. |
+| `chat.message` | `chatId`, `from`, `text`, `sentAt` | Un mensaje directo entre tus dispositivos. No lleva `sessionId`: viaja por el canal de control. |
 
 ## Los tres frames que definen la app
 
@@ -134,6 +136,24 @@ El mapeo a milisegundos es del cliente, no del protocolo.
 Si la app no está conectada no hay a quién avisar: el frame queda en el buffer de replay y
 se entrega al reconectar, con la háptica correspondiente
 (ver [04-ux-manos-libres.md](04-ux-manos-libres.md#cuando-la-app-está-en-segundo-plano)).
+
+### `chat.message` — entre tus dispositivos, no con el agente
+
+```json
+{
+  "t": "chat.message", "seq": 7,
+  "chatId": "c_7", "from": "escritorio", "text": "ya lo he revisado, sigue tú",
+  "sentAt": 1790158767209
+}
+```
+
+No pertenece a ninguna sesión —no lleva `sessionId`— porque no es del agente: es un mensaje
+tuyo a tus otros dispositivos, para coordinarte contigo mismo («ya cogí yo esta», «déjalo, lo
+sigo desde el portátil»). Viaja por el canal de control (`/v1/control`), el mismo que ya
+lleva `session.list` y los despertares, y el nodo guarda los últimos `MaxChatBuffer` (200) en
+un buffer en anillo que viene incluido en `chatHistory` dentro del `hello`: quien se conecta
+no empieza a ciegas, y el historial se pierde al reiniciar el nodo, a propósito — igual que el
+resto de lo que el nodo mantiene en memoria (ver [07 §11](07-decisiones.md#11--chat-entre-tus-dispositivos-por-el-canal-de-control)).
 
 ## Reconexión, paso a paso
 

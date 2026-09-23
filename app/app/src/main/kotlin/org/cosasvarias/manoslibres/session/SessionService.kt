@@ -100,6 +100,12 @@ class SessionService : LifecycleService() {
 
             is ServerFrame.Hello -> {
                 sessionId = frame.sessions.firstOrNull()?.sessionId
+                // TODO(chat): pintar frame.chatHistory en la pantalla de chat al reconectar.
+            }
+
+            is ServerFrame.Chat -> {
+                // TODO(chat): encolar en la pantalla de chat entre dispositivos. No se narra:
+                // es texto entre tú y tú mismo, no del agente.
             }
 
             // Los deltas alimentan la pantalla, no la voz.

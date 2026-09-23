@@ -50,6 +50,7 @@ func (s *Servidor) Rutas() http.Handler {
 	})
 
 	mux.HandleFunc("GET /v1/control", s.conAuth(s.control))
+	mux.HandleFunc("POST /v1/chat", s.conAuth(s.chat))
 	mux.HandleFunc("GET /v1/sesiones", s.conAuth(s.listar))
 	mux.HandleFunc("POST /v1/sesiones", s.conAuth(s.abrir))
 	mux.HandleFunc("GET /v1/sesiones/{id}/flujo", s.conAuth(s.flujo))
@@ -106,9 +107,27 @@ func (s *Servidor) control(w http.ResponseWriter, r *http.Request, _ string) {
 		Nodo:      "manos-libres/nodo 0.0.0",
 		Motores:   []string{"claude-code"},
 		Sesiones:  s.hub.Listar(),
+		Chat:      s.hub.HistorialChat(),
 	})
 
 	s.bombear(r.Context(), flujo, sub)
+}
+
+// ── Chat entre dispositivos ─────────────────────────────────────────────────────────────
+
+func (s *Servidor) chat(w http.ResponseWriter, r *http.Request, dispositivo string) {
+	var cuerpo struct {
+		Texto string `json:"text"`
+	}
+	if !leerJSON(w, r, &cuerpo) {
+		return
+	}
+	c, err := s.hub.EnviarChat(dispositivo, cuerpo.Texto)
+	if err != nil {
+		fallo(w, http.StatusBadRequest, ErrPeticion, err.Error())
+		return
+	}
+	escribirJSON(w, http.StatusCreated, c)
 }
 
 // ── Flujo de una sesión ─────────────────────────────────────────────────────────────────

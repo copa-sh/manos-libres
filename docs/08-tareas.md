@@ -31,6 +31,9 @@ Sin esto no hay producto, y lo demás se construye encima.
 
 ## Nodo
 
+- [x] **Chat entre dispositivos.** `POST /v1/chat` y el frame `chat.message` por el canal de
+      control, con historial en `hello` ([decisión 11](07-decisiones.md#11--chat-entre-tus-dispositivos-por-el-canal-de-control)).
+      Falta la pantalla en la app — ver H1 más abajo.
 - [ ] Cerrar sesiones: no hay endpoint para cerrar una, ni limpieza de las inactivas.
 - [ ] Comprobar que `Interrumpir` (SIGINT) termina el turno y **no** la sesión. Si la mata,
       usar la capacidad `interrupt_receipt_v1` que el CLI anuncia en su `system/init`.
@@ -59,6 +62,9 @@ El hito que está en blanco: la app tiene estructura y tipos, pero nunca se ha c
 - [ ] Pantalla de emparejamiento: URL del nodo y token, en almacenamiento cifrado.
 - [ ] `SessionService` con `START_STICKY`, notificación persistente y petición de exención de
       optimización de batería.
+- [ ] Pantalla de chat entre dispositivos: lista de `chat.message`, campo de texto que manda
+      `ClientFrame.Chat`, y pintar `Hello.chatHistory` al conectar. El protocolo ya está
+      cableado en `net/Protocol.kt`; falta la UI y el `TODO(chat)` en `SessionService.kt`.
 
 ## H2 · Que el teléfono te busque
 
