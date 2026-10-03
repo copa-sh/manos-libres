@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import org.cosasvarias.manoslibres.session.SessionService
+import org.cosasvarias.manoslibres.ui.theme.BohioTheme
 
 /**
  * El punto de entrada, y la pantalla menos importante de la app.
@@ -21,7 +22,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(state)
         startForegroundService(Intent(this, SessionService::class.java))
         setContent {
-            // TODO(H1)
+            BohioTheme {
+                // TODO(H1)
+            }
         }
     }
 }

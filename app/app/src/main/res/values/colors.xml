@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paleta de rama-io (bohio). Los mismos valores que ui/theme/Bohio.kt. -->
+<resources>
+    <color name="bg_1">#0E181A</color>
+    <color name="bg_2">#162A2E</color>
+    <color name="foreground">#EAE6DF</color>
+</resources>

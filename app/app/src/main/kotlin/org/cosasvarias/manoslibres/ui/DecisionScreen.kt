@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import org.cosasvarias.manoslibres.net.DecisionOption
 import org.cosasvarias.manoslibres.net.OptionTone
 import org.cosasvarias.manoslibres.net.ServerFrame
+import org.cosasvarias.manoslibres.ui.theme.Bohio
 
 /**
  * La botonera.
@@ -51,7 +52,7 @@ fun DecisionScreen(
     val principales = decision.options.filter { !it.sticky }
     val fijas = decision.options.filter { it.sticky }
 
-    Column(Modifier.fillMaxSize().background(Color.Black)) {
+    Column(Modifier.fillMaxSize().background(Bohio.bg1)) {
         principales.forEachIndexed { i, opcion ->
             Franja(
                 numero = i + 1,
@@ -106,13 +107,13 @@ private fun Franja(
                     text = opcion.label.uppercase(),
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
+                    color = Bohio.foreground,
                 )
                 opcion.description?.let {
                     Text(
                         text = it,
                         fontSize = 14.sp,
-                        color = Color.White.copy(alpha = 0.7f),
+                        color = Bohio.icon,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -123,10 +124,11 @@ private fun Franja(
 }
 
 private fun colores(tone: OptionTone): Pair<Color, Color> = when (tone) {
-    OptionTone.go -> Color(0xFF0E2A16) to Color(0xFF3DDC84)
-    OptionTone.stop -> Color(0xFF2A1414) to Color(0xFFFF6B6B)
-    OptionTone.danger -> Color(0xFF2E1A05) to Color(0xFFFFA726)
-    OptionTone.neutral -> Color(0xFF141414) to Color(0xFF9E9E9E)
+    // (fondo, borde). Siguen distinguiéndose entre sí: turquesa, rojo, dorado y gris.
+    OptionTone.go -> Bohio.bg2 to Bohio.accent1
+    OptionTone.stop -> Color(0xFF2A1A1A) to Bohio.dangerOnDark
+    OptionTone.danger -> Color(0xFF2A2410) to Bohio.accent2
+    OptionTone.neutral -> Bohio.bg2 to Bohio.collapsibleHeader
 }
 
 /** El grosor duplica la señal del color, que no puede ser el único canal. */

@@ -4,6 +4,8 @@
     <style name="Theme.ManosLibres" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/bg_1</item>
+        <item name="android:textColor">@color/foreground</item>
     </style>
 
     <!--

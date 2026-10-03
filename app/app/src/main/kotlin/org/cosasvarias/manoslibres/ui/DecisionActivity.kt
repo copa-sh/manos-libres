@@ -3,6 +3,7 @@ package org.cosasvarias.manoslibres.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import org.cosasvarias.manoslibres.ui.theme.BohioTheme
 
 /**
  * Contenedor de [DecisionScreen].
@@ -20,7 +21,9 @@ class DecisionActivity : ComponentActivity() {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         setContent {
-            // TODO(H3)
+            BohioTheme {
+                // TODO(H3)
+            }
         }
     }
 }
