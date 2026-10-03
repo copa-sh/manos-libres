@@ -6,3 +6,9 @@
 -keepclasseswithmembers class org.cosasvarias.manoslibres.net.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
+-keepclassmembers class org.cosasvarias.manoslibres.pairing.** {
+    *** Companion;
+}
+-keepclasseswithmembers class org.cosasvarias.manoslibres.pairing.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}

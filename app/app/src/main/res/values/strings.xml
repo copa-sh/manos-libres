@@ -19,4 +19,50 @@
     <string name="voz_fin_mensaje">Fin del mensaje.</string>
     <string name="voz_sin_mas">No hay nada más por ahora.</string>
     <string name="voz_resuelta_en_otro">Esa decisión se contestó en otro dispositivo.</string>
+
+    <string name="sesion_sin_emparejar">Sin emparejar con ningún nodo</string>
+    <string name="sesion_decision_pendiente">" · decisión pendiente"</string>
+    <string name="estado_inactivo">Conectado · inactivo</string>
+    <string name="estado_pensando">Conectado · pensando</string>
+    <string name="estado_trabajando">Conectado · trabajando</string>
+    <string name="estado_esperando">Conectado · esperando tu decisión</string>
+    <string name="estado_error">Conectado · con un error</string>
+
+    <string name="aviso_titulo">Aviso del agente</string>
+    <string name="aviso_texto_defecto">El agente te llama la atención.</string>
+    <string name="tarea_terminada_titulo">Tarea terminada</string>
+    <string name="decision_titulo">El agente espera tu decisión</string>
+
+    <string name="voz_resuelta_por">Contestada desde %1$s.</string>
+    <string name="voz_cancelada">El agente canceló la pregunta.</string>
+    <string name="voz_decision_pendiente">Decisión pendiente.</string>
+    <string name="voz_auth_fallida">El nodo ha rechazado este dispositivo. Hay que emparejarlo de nuevo.</string>
+    <string name="voz_actualizar">Hay que actualizar la aplicación para hablar con el nodo.</string>
+
+    <string name="voz_sin_emparejar">Este dispositivo no está emparejado con ningún nodo.</string>
+    <string name="voz_conectando">Conectando con el nodo.</string>
+    <string name="voz_sin_conexion">No hay conexión con el nodo; sigo reintentando.</string>
+    <string name="voz_estado_inactivo">El agente está inactivo.</string>
+    <string name="voz_estado_pensando">El agente está pensando.</string>
+    <string name="voz_estado_trabajando">El agente está trabajando.</string>
+    <string name="voz_estado_esperando">El agente espera tu decisión.</string>
+    <string name="voz_estado_error">El agente tiene un error.</string>
+
+    <!-- Latido hablado: tras N minutos de silencio mientras el agente trabaja. -->
+    <string name="voz_latido_simple">Sigo trabajando.</string>
+    <string name="voz_latido">Sigo trabajando, llevo %1$s.</string>
+    <string name="voz_latido_con_herramientas">Sigo trabajando, llevo %1$s y he usado %2$s.</string>
+
+    <plurals name="minutos">
+        <item quantity="one">%d minuto</item>
+        <item quantity="other">%d minutos</item>
+    </plurals>
+    <plurals name="herramientas">
+        <item quantity="one">%d herramienta</item>
+        <item quantity="other">%d herramientas</item>
+    </plurals>
+    <plurals name="voz_decisiones_pendientes">
+        <item quantity="one">Hay %d decisión pendiente.</item>
+        <item quantity="other">Hay %d decisiones pendientes.</item>
+    </plurals>
 </resources>

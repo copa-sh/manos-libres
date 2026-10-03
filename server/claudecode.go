@@ -51,10 +51,20 @@ type AdaptadorClaudeCode struct {
 	sesionMotor string
 	mcp         *ServidorMCP
 	cancelar    context.CancelFunc
+	parando     bool
+
+	// Herramientas en curso, por `tool_use_id`, para poder etiquetar la fase `end` cuando
+	// llega el `tool_result` (que solo trae el id).
+	enCurso map[string]herramientaEnCurso
+}
+
+type herramientaEnCurso struct {
+	nombre string
+	input  map[string]any
 }
 
 func NuevoAdaptadorClaudeCode(cfg Config) *AdaptadorClaudeCode {
-	return &AdaptadorClaudeCode{cfg: cfg}
+	return &AdaptadorClaudeCode{cfg: cfg, enCurso: map[string]herramientaEnCurso{}}
 }
 
 func (a *AdaptadorClaudeCode) Motor() string { return "claude-code" }
@@ -131,7 +141,10 @@ func (a *AdaptadorClaudeCode) Arrancar(ctx context.Context, anf Anfitrion, opts 
 	}
 
 	a.cmd, a.stdin = cmd, stdin
-	go a.consumir(stdout)
+	go func() {
+		a.consumir(stdout)
+		a.alTerminarSalida()
+	}()
 	go registrarStderr(stderr)
 	return nil
 }
@@ -173,8 +186,22 @@ func (a *AdaptadorClaudeCode) Interrumpir() error {
 	return a.cmd.Process.Signal(syscall.SIGINT)
 }
 
+// alTerminarSalida avisa si el CLI se fue sin que lo hubiéramos pedido: por ejemplo, si
+// SIGINT lo mata en vez de terminar el turno. Sin esto la sesión se quedaría «viva» y muda.
+func (a *AdaptadorClaudeCode) alTerminarSalida() {
+	a.mu.Lock()
+	parando, anf := a.parando, a.anfitrion
+	a.mu.Unlock()
+	if parando || anf == nil {
+		return
+	}
+	anf.Emitir(Evento{Clase: EvError, Mensaje: "el motor terminó inesperadamente"})
+	anf.Emitir(Evento{Clase: EvEstado, Estado: EstadoError, Detalle: "el motor terminó"})
+}
+
 func (a *AdaptadorClaudeCode) Parar() error {
 	a.mu.Lock()
+	a.parando = true
 	cancelar, stdin, cmd, mcp := a.cancelar, a.stdin, a.cmd, a.mcp
 	a.cmd, a.stdin = nil, nil
 	a.mu.Unlock()
@@ -287,11 +314,39 @@ func (a *AdaptadorClaudeCode) despachar(msg map[string]any) {
 				continue
 			}
 			input, _ := bloque["input"].(map[string]any)
+			a.mu.Lock()
+			a.enCurso[cadena(bloque["id"])] = herramientaEnCurso{cadena(bloque["name"]), input}
+			a.mu.Unlock()
 			a.anfitrion.Emitir(Evento{
 				Clase: EvHerramienta, ToolUseID: cadena(bloque["id"]), Fase: "start",
 				Nombre: cadena(bloque["name"]), Input: input,
 			})
 			a.anfitrion.Emitir(Evento{Clase: EvEstado, Estado: EstadoTrabajando})
+		}
+
+	case "user":
+		// Los resultados de herramientas vuelven como mensajes `user` con bloques
+		// `tool_result {tool_use_id, is_error}`. Cada uno cierra la fase de su herramienta.
+		m, _ := msg["message"].(map[string]any)
+		bloques, _ := m["content"].([]any) // `content` es un string cuando es texto plano
+		for _, b := range bloques {
+			bloque, _ := b.(map[string]any)
+			if cadena(bloque["type"]) != "tool_result" {
+				continue
+			}
+			id := cadena(bloque["tool_use_id"])
+			esError, _ := bloque["is_error"].(bool)
+			ok := !esError
+
+			a.mu.Lock()
+			h := a.enCurso[id]
+			delete(a.enCurso, id)
+			a.mu.Unlock()
+
+			a.anfitrion.Emitir(Evento{
+				Clase: EvHerramienta, ToolUseID: id, Fase: "end",
+				Nombre: h.nombre, Input: h.input, Ok: &ok,
+			})
 		}
 
 	case "result":

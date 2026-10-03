@@ -26,6 +26,21 @@ type Config struct {
 	// Ruta del binario de Claude Code. Se deja configurable porque la versión importa:
 	// ver la advertencia sobre `--bare` en claudecode.go.
 	BinarioClaude string
+	// Versión del CLI con la que se probó el nodo. Si la instalada es otra, se avisa al
+	// arrancar (ver version.go). Vacío = sin fijar, y también se avisa.
+	VersionClaudeFijada string
+	// Minutos sin actividad tras los que se cierra una sesión ociosa. 0 = nunca.
+	InactividadMinutos int
+	// Dónde se guardan las sesiones para poder reanudarlas con `--resume` tras reiniciar el
+	// nodo. Vacío = no se persiste.
+	FicheroEstado string
+	// Límites de docs/05-seguridad.md. Todos por minuto salvo las conexiones.
+	LimiteAbrirMin     int
+	LimitePromptMin    int
+	MaxConexionesToken int
+	MaxConexionesNodo  int
+	// Intentos de autenticación fallidos por IP antes del bloqueo (ventana y bloqueo: 10 min).
+	MaxFallosAuth int
 }
 
 func CargarConfig() (Config, error) {
@@ -38,6 +53,15 @@ func CargarConfig() (Config, error) {
 		ModeloAgente:      env("AGENT_MODEL", "opus"),
 		KeepaliveSegundos: entero("KEEPALIVE_SEGUNDOS", 20),
 		BinarioClaude:     env("CLAUDE_BIN", "claude"),
+
+		VersionClaudeFijada: env("CLAUDE_VERSION", ""),
+		InactividadMinutos:  enteroONulo("SESSION_IDLE_MINUTES", 240),
+		FicheroEstado:       env("STATE_FILE", "estado.json"),
+		LimiteAbrirMin:      entero("LIMITE_ABRIR_MIN", 3),
+		LimitePromptMin:     entero("LIMITE_PROMPT_MIN", 30),
+		MaxConexionesToken:  entero("MAX_CONEXIONES_TOKEN", 4),
+		MaxConexionesNodo:   entero("MAX_CONEXIONES_NODO", 20),
+		MaxFallosAuth:       entero("MAX_FALLOS_AUTH", 5),
 	}
 	if c.Token == "" {
 		return c, errors.New("falta la variable de entorno DEV_TOKEN (ver .env.example)")
@@ -89,6 +113,17 @@ func env(clave, pordefecto string) string {
 func entero(clave string, pordefecto int) int {
 	if v := strings.TrimSpace(os.Getenv(clave)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+		fmt.Fprintf(os.Stderr, "aviso: %s no es un número, usando %d\n", clave, pordefecto)
+	}
+	return pordefecto
+}
+
+// enteroONulo es como `entero` pero admite 0 (que significa «desactivado»).
+func enteroONulo(clave string, pordefecto int) int {
+	if v := strings.TrimSpace(os.Getenv(clave)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return n
 		}
 		fmt.Fprintf(os.Stderr, "aviso: %s no es un número, usando %d\n", clave, pordefecto)

@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"sync"
@@ -48,6 +49,20 @@ type Sesion struct {
 	decisiones      map[string]*decisionPendiente
 	sigDecision     int
 	ultimaActividad time.Time
+
+	// Para no emitir `session.state` repetidos: el CLI manda tres `idle` seguidos.
+	detalleEstado string
+	// Si ya hay un frame de estado publicado; antes del primero siempre se emite.
+	hayEstado bool
+
+	cerrada bool
+	// Id de sesión del motor a reanudar con `--resume`; vacío si es una sesión nueva.
+	reanudar string
+	// Último id del motor que se notificó a `alMotor`.
+	motorNotificado string
+	// Lo llama la sesión (sin mutex tomado) cuando el motor publica su id, para que el hub lo
+	// persista y se pueda reanudar tras reiniciar el nodo.
+	alMotor func()
 }
 
 func NuevaSesion(sessionID string, ad Adaptador, cwd, titulo string, maxReplay int) *Sesion {
@@ -70,7 +85,29 @@ func NuevaSesion(sessionID string, ad Adaptador, cwd, titulo string, maxReplay i
 }
 
 func (s *Sesion) Arrancar(ctx context.Context, modelo string) error {
-	return s.adaptador.Arrancar(ctx, s, OpcionesAdaptador{Cwd: s.Cwd, Modelo: modelo})
+	return s.adaptador.Arrancar(ctx, s, OpcionesAdaptador{Cwd: s.Cwd, Modelo: modelo,
+		Reanudar: s.reanudar})
+}
+
+// IdMotor es el id de sesión del propio motor (el que se pasa a `--resume`), o el que se
+// pidió reanudar si el motor aún no ha publicado uno nuevo.
+func (s *Sesion) IdMotor() string {
+	if id := s.adaptador.SesionDelMotor(); id != "" {
+		return id
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reanudar
+}
+
+// Inactiva dice si la sesión se puede cerrar por abandono: sin actividad desde `limite`, sin
+// nadie siguiéndola, sin decisiones pendientes y con el agente esperando al usuario. Una
+// sesión que trabaja o que espera una respuesta nunca es «inactiva», por muy callada que esté.
+func (s *Sesion) Inactiva(limite time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.cerrada && len(s.suscriptores) == 0 && len(s.decisiones) == 0 &&
+		s.estado == EstadoIdle && s.ultimaActividad.Before(limite)
 }
 
 func (s *Sesion) Info() InfoSesion {
@@ -159,8 +196,33 @@ var difundir func(Frame)
 
 // Emitir implementa Anfitrion: de evento normalizado a frame del protocolo.
 func (s *Sesion) Emitir(ev Evento) {
+	s.emitir(ev)
+
+	// Fuera del mutex: el hub, al persistir, vuelve a preguntar a las sesiones.
+	if s.alMotor != nil {
+		if id := s.adaptador.SesionDelMotor(); id != "" {
+			s.mu.Lock()
+			nuevo := id != s.motorNotificado
+			s.motorNotificado = id
+			s.mu.Unlock()
+			if nuevo {
+				s.alMotor()
+			}
+		}
+	}
+}
+
+func (s *Sesion) emitir(ev Evento) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.cerrada {
+		return
+	}
+	// Un estado igual al anterior no es información: gastaría un `seq` y un frame.
+	if ev.Clase == EvEstado && s.hayEstado && ev.Estado == s.estado && ev.Detalle == s.detalleEstado {
+		return
+	}
 
 	s.seq++
 	seq := s.seq
@@ -169,6 +231,8 @@ func (s *Sesion) Emitir(ev Evento) {
 	switch ev.Clase {
 	case EvEstado:
 		s.estado = ev.Estado
+		s.detalleEstado = ev.Detalle
+		s.hayEstado = true
 		s.publicar(&EstadoSesion{cabecera: cab("session.state"), SessionID: s.SessionID,
 			Estado: ev.Estado, Detalle: ev.Detalle})
 
@@ -296,19 +360,68 @@ func (s *Sesion) frameDecision(d *decisionPendiente) Frame {
 // ── Ciclo de vida ───────────────────────────────────────────────────────────────────────
 
 func (s *Sesion) Prompt(texto string) error {
+	s.mu.Lock()
+	cerrada := s.cerrada
+	s.mu.Unlock()
+	if cerrada {
+		return errSesionCerrada
+	}
 	s.Emitir(Evento{Clase: EvEstado, Estado: EstadoPensando})
 	return s.adaptador.Enviar(texto)
 }
 
-func (s *Sesion) Interrumpir() error { return s.adaptador.Interrumpir() }
+var errSesionCerrada = errors.New("la sesión está cerrada")
 
-func (s *Sesion) Cerrar() error {
+// Interrumpir termina el turno en curso, **no** la sesión: no se cierra, no se baja del hub
+// y conserva su buffer de replay. Las decisiones pendientes eran de ese turno, así que se
+// deniegan (interrumpir no puede significar aprobar) y se anuncian como `cancelled`.
+//
+// Lo que el CLI real hace con SIGINT —terminar el turno y seguir vivo— está sin verificar
+// (docs/08-tareas.md); la semántica de la sesión, en cambio, se cumple con cualquier motor.
+func (s *Sesion) Interrumpir() error {
 	s.mu.Lock()
+	if s.cerrada {
+		s.mu.Unlock()
+		return errSesionCerrada
+	}
+	s.mu.Unlock()
+
+	if err := s.adaptador.Interrumpir(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, d := range s.decisiones {
+		delete(s.decisiones, id)
+		d.respuesta <- RespuestaDecision{OpcionIDs: []string{"deny"}}
+		s.seq++
+		s.publicar(&DecisionResuelta{cabecera: cabecera{T: "decision.resolved", S: s.seq},
+			SessionID: s.SessionID, DecisionID: id, Resolucion: "cancelled"})
+	}
+	return nil
+}
+
+// Cerrar cierra la sesión por petición del usuario.
+func (s *Sesion) Cerrar() error { return s.CerrarPor("user") }
+
+// CerrarPor cierra la sesión y avisa a quien la siga con `session.closed`. Es idempotente.
+// `motivo` es `user`, `idle` (limpieza por abandono) o `shutdown`.
+func (s *Sesion) CerrarPor(motivo string) error {
+	s.mu.Lock()
+	if s.cerrada {
+		s.mu.Unlock()
+		return nil
+	}
+	s.cerrada = true
 	for id, d := range s.decisiones {
 		// Cerrar con decisiones pendientes las deniega: cerrar no puede significar aprobar.
 		d.respuesta <- RespuestaDecision{OpcionIDs: []string{"deny"}}
 		delete(s.decisiones, id)
 	}
+	s.seq++
+	s.publicar(&SesionCerrada{cabecera: cabecera{T: "session.closed", S: s.seq},
+		SessionID: s.SessionID, Motivo: motivo})
 	s.mu.Unlock()
 	return s.adaptador.Parar()
 }

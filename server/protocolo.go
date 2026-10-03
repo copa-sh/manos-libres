@@ -250,6 +250,17 @@ type Chat struct {
 	Enviado int64  `json:"sentAt"`
 }
 
+// SesionCerrada se manda por el flujo de la sesión cuando se
+// cierra: el flujo termina justo después de este frame; la lista del canal de control deja de
+// incluirla. `reason`: `user`, `idle` o
+// `shutdown`. Es un frame nuevo y aditivo: un cliente que no lo conozca lo ignora y verá el
+// flujo cerrarse.
+type SesionCerrada struct {
+	cabecera
+	SessionID string `json:"sessionId"`
+	Motivo    string `json:"reason"`
+}
+
 type ErrorFrame struct {
 	cabecera
 	SessionID string      `json:"sessionId,omitempty"`

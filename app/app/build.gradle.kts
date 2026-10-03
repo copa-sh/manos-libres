@@ -47,5 +47,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    testImplementation("junit:junit:4.13.2")
 }

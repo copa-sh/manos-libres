@@ -63,13 +63,19 @@ debajo de API 34 se cae a HTTP/2 sobre TCP, que sirve igual para un GET en strea
 | `GET /salud` | Sin autenticar. Lo único que no la exige. |
 | `GET /v1/control` | SSE: `hello` (con el historial de chat), `session.list` y los despertares. |
 | `POST /v1/chat` | Manda un mensaje directo a tus otros dispositivos: `{text}`. |
-| `GET /v1/sesiones` | Lista de sesiones. |
-| `POST /v1/sesiones` | Abre una: `{cwd, title?}`. |
+| `GET /v1/sesiones` | `{sessions[], resumable[]}`: las vivas y las cerradas que se pueden reabrir. |
+| `POST /v1/sesiones` | Abre una: `{cwd, title?}`, o reabre una cerrada con `{resume: "s_3"}` (`--resume` con el id del motor guardado; 404 si no existe, 409 si sigue viva). |
+| `DELETE /v1/sesiones/{id}` | Cierra la sesión (204; 404 si no existe). Alias: `POST .../cierre`. El flujo recibe `session.closed` y termina. |
 | `GET /v1/sesiones/{id}/flujo` | SSE de la sesión. Reanuda con `Last-Event-ID` o `?desde=`. |
 | `POST /v1/sesiones/{id}/prompt` | `{text}` |
 | `POST /v1/sesiones/{id}/decision` | `{decisionId, optionIds, always}` |
 | `POST /v1/sesiones/{id}/interrupcion` | Termina el turno en curso, no la sesión. |
 | `POST /v1/sesiones/{id}/narracion` | Dónde va la voz. |
+
+Límites (429 con `Retry-After`): 3 aperturas y 30 prompts por minuto y token, 4 flujos SSE por
+token y 20 por nodo, y 5 fallos de autenticación por IP en 10 minutos bloquean esa IP 10
+minutos. Todos configurables en `.env`. Las sesiones ociosas se cierran a los
+`SESSION_IDLE_MINUTES` (240 por defecto).
 
 La autenticación es `Authorization: Bearer`, en cabecera y no en la URL. En `echo-server` va
 en la URL porque Echo no deja configurar cabeceras, y el precio es que el token acaba en los

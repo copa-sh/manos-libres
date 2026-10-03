@@ -15,3 +15,7 @@ captures/
 
 # Binario del nodo
 /server/nodo
+
+# Estado del nodo (sesiones reanudables)
+estado.json
+estado.json.tmp

@@ -39,12 +39,17 @@ func ejecutar() error {
 			"la API en lugar de usar la suscripción; quítala si no era lo que querías")
 	}
 
+	if aviso := ComprobarVersionCLI(cfg, ejecutarVersion); aviso != "" {
+		log.Println("aviso: " + aviso)
+	}
+
 	// Este contexto es la vida del nodo. Las sesiones cuelgan de él y no de la petición que
 	// las abrió, para que el agente siga trabajando después de responder al POST.
 	vida, terminar := context.WithCancel(context.Background())
 	defer terminar()
 
 	hub := NuevoHub(vida, cfg)
+	hub.IniciarLimpieza(vida)
 	servidor := &http.Server{
 		Addr:    cfg.Host + ":" + cfg.Port,
 		Handler: NuevoServidor(cfg, hub).Rutas(),

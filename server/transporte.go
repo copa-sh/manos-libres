@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -36,10 +37,26 @@ import (
 type Servidor struct {
 	cfg Config
 	hub *Hub
+
+	// Límites de docs/05-seguridad.md.
+	tasa       *Limitador
+	bloqueo    *BloqueoAuth
+	conexiones *Conexiones
 }
 
 func NuevoServidor(cfg Config, hub *Hub) *Servidor {
-	return &Servidor{cfg: cfg, hub: hub}
+	def := func(v, d int) int {
+		if v <= 0 {
+			return d
+		}
+		return v
+	}
+	return &Servidor{
+		cfg: cfg, hub: hub,
+		tasa:       NuevoLimitador(),
+		bloqueo:    NuevoBloqueoAuth(def(cfg.MaxFallosAuth, 5), 10*time.Minute),
+		conexiones: NuevasConexiones(def(cfg.MaxConexionesToken, 4), def(cfg.MaxConexionesNodo, 20)),
+	}
 }
 
 func (s *Servidor) Rutas() http.Handler {
@@ -58,6 +75,9 @@ func (s *Servidor) Rutas() http.Handler {
 	mux.HandleFunc("POST /v1/sesiones/{id}/decision", s.conAuth(s.decision))
 	mux.HandleFunc("POST /v1/sesiones/{id}/interrupcion", s.conAuth(s.interrumpir))
 	mux.HandleFunc("POST /v1/sesiones/{id}/narracion", s.conAuth(s.narracion))
+	// Cerrar una sesión: `DELETE` y, para clientes sin DELETE, `POST .../cierre`.
+	mux.HandleFunc("DELETE /v1/sesiones/{id}", s.conAuth(s.cerrar))
+	mux.HandleFunc("POST /v1/sesiones/{id}/cierre", s.conAuth(s.cerrar))
 
 	return cabecerasSeguridad(mux)
 }
@@ -71,8 +91,14 @@ func (s *Servidor) Rutas() http.Handler {
 // de acceso de Caddy. La app de manos-libres es nuestra, así que ese precio no se paga.
 func (s *Servidor) conAuth(siguiente func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ip := ipCliente(r)
+		if bloqueada, resto := s.bloqueo.Bloqueada(ip); bloqueada {
+			tasaExcedida(w, resto, "demasiados intentos de autenticación fallidos")
+			return
+		}
 		dado := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		if subtle.ConstantTimeCompare([]byte(dado), []byte(s.cfg.Token)) != 1 {
+			s.bloqueo.Fallo(ip)
 			fallo(w, http.StatusUnauthorized, ErrAuth, "token inválido")
 			return
 		}
@@ -88,9 +114,47 @@ func (s *Servidor) conAuth(siguiente func(http.ResponseWriter, *http.Request, st
 	}
 }
 
+// limitar aplica una cuota por minuto y token a una categoría de petición (`abrir`,
+// `prompt`). Devuelve false, ya respondido con 429, si se excede.
+func (s *Servidor) limitar(w http.ResponseWriter, r *http.Request, categoria string, max int) bool {
+	if max <= 0 {
+		return true
+	}
+	clave := categoria + ":" + clavePorToken(strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")))
+	if ok, espera := s.tasa.Permitir(clave, max, time.Minute); !ok {
+		tasaExcedida(w, espera, "demasiadas peticiones de "+categoria)
+		return false
+	}
+	return true
+}
+
+// tomarConexion reserva un hueco de flujo SSE (4 por token y 20 por nodo por defecto). Quien
+// recibe nil ya tiene la respuesta 429 escrita.
+func (s *Servidor) tomarConexion(w http.ResponseWriter, r *http.Request) func() {
+	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	liberar := s.conexiones.Tomar(clavePorToken(token))
+	if liberar == nil {
+		w.Header().Set("Retry-After", "5")
+		fallo(w, http.StatusTooManyRequests, ErrOcupado, "demasiadas conexiones abiertas")
+	}
+	return liberar
+}
+
+func tasaExcedida(w http.ResponseWriter, espera time.Duration, mensaje string) {
+	seg := int(espera.Seconds()) + 1
+	w.Header().Set("Retry-After", strconv.Itoa(seg))
+	fallo(w, http.StatusTooManyRequests, ErrTasa, mensaje)
+}
+
 // ── Canal de control ────────────────────────────────────────────────────────────────────
 
 func (s *Servidor) control(w http.ResponseWriter, r *http.Request, _ string) {
+	liberar := s.tomarConexion(w, r)
+	if liberar == nil {
+		return
+	}
+	defer liberar()
+
 	flujo, err := abrirSSE(w)
 	if err != nil {
 		fallo(w, http.StatusInternalServerError, ErrPeticion, err.Error())
@@ -143,6 +207,12 @@ func (s *Servidor) flujo(w http.ResponseWriter, r *http.Request, _ string) {
 	// enganche, cuando la app ya sabe por dónde iba de una ejecución anterior.
 	desde := entero64(r.Header.Get("Last-Event-ID"), entero64(r.URL.Query().Get("desde"), 0))
 
+	liberar := s.tomarConexion(w, r)
+	if liberar == nil {
+		return
+	}
+	defer liberar()
+
 	flujo, err := abrirSSE(w)
 	if err != nil {
 		fallo(w, http.StatusInternalServerError, ErrPeticion, err.Error())
@@ -179,6 +249,10 @@ func (s *Servidor) bombear(ctx context.Context, flujo *sse, sub Suscriptor) {
 			if err := flujo.frame(f); err != nil {
 				return
 			}
+			// Tras `session.closed` no vendrá nada más: se cierra el flujo.
+			if f.Tipo() == "session.closed" {
+				return
+			}
 		case <-tic.C:
 			if err := flujo.comentario("ping"); err != nil {
 				return
@@ -190,19 +264,33 @@ func (s *Servidor) bombear(ctx context.Context, flujo *sse, sub Suscriptor) {
 // ── Peticiones del cliente ──────────────────────────────────────────────────────────────
 
 func (s *Servidor) listar(w http.ResponseWriter, _ *http.Request, _ string) {
-	escribirJSON(w, http.StatusOK, map[string]any{"sessions": s.hub.Listar()})
+	// `resumable` es aditivo: sesiones cerradas que se pueden reabrir con `resume`.
+	escribirJSON(w, http.StatusOK, map[string]any{
+		"sessions": s.hub.Listar(), "resumable": s.hub.Reanudables()})
 }
 
 func (s *Servidor) abrir(w http.ResponseWriter, r *http.Request, _ string) {
 	var cuerpo struct {
 		Cwd    string `json:"cwd"`
 		Titulo string `json:"title"`
+		// Id de una sesión cerrada (de `resumable`) a reabrir con `--resume`. Aditivo.
+		Reanudar string `json:"resume"`
+	}
+	if !s.limitar(w, r, "abrir", s.cfg.LimiteAbrirMin) {
+		return
 	}
 	if !leerJSON(w, r, &cuerpo) {
 		return
 	}
-	sesion, err := s.hub.Abrir(cuerpo.Cwd, cuerpo.Titulo)
-	if err != nil {
+	sesion, err := s.hub.Abrir(cuerpo.Cwd, cuerpo.Titulo, cuerpo.Reanudar)
+	switch {
+	case errors.Is(err, ErrNoReanudable):
+		fallo(w, http.StatusNotFound, ErrSinSesion, err.Error())
+		return
+	case errors.Is(err, ErrYaAbierta):
+		fallo(w, http.StatusConflict, ErrOcupado, err.Error())
+		return
+	case err != nil:
 		fallo(w, http.StatusForbidden, ErrRuta, err.Error())
 		return
 	}
@@ -212,6 +300,9 @@ func (s *Servidor) abrir(w http.ResponseWriter, r *http.Request, _ string) {
 func (s *Servidor) prompt(w http.ResponseWriter, r *http.Request, _ string) {
 	sesion := s.sesionDe(w, r)
 	if sesion == nil {
+		return
+	}
+	if !s.limitar(w, r, "prompt", s.cfg.LimitePromptMin) {
 		return
 	}
 	var cuerpo struct {
@@ -261,6 +352,20 @@ func (s *Servidor) interrumpir(w http.ResponseWriter, r *http.Request, _ string)
 		return
 	}
 	if err := sesion.Interrumpir(); err != nil {
+		fallo(w, http.StatusInternalServerError, ErrMotor, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// cerrar cierra la sesión: `204` si existía, `404` si no. El flujo de quien la siguiera
+// recibe `session.closed` y termina.
+func (s *Servidor) cerrar(w http.ResponseWriter, r *http.Request, _ string) {
+	if err := s.hub.CerrarSesion(r.PathValue("id"), "user"); err != nil {
+		if errors.Is(err, ErrNoSesion) {
+			fallo(w, http.StatusNotFound, ErrSinSesion, r.PathValue("id"))
+			return
+		}
 		fallo(w, http.StatusInternalServerError, ErrMotor, err.Error())
 		return
 	}

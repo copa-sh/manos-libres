@@ -210,6 +210,13 @@ sealed interface ServerFrame {
     data object Pong : ServerFrame
 
     /**
+     * La sesión se cerró (`reason`: `user`, `idle` o `shutdown`). Llega por el flujo de la
+     * sesión y el nodo lo cierra justo después: el cliente deja de seguirla.
+     */
+    @Serializable @SerialName("session.closed")
+    data class SessionClosed(val sessionId: String, val seq: Long, val reason: String) : ServerFrame
+
+    /**
      * Un mensaje directo entre tus dispositivos, fuera de cualquier sesión de agente. Viaja
      * por el canal de control, no por el flujo de una sesión, así que no lleva `sessionId`.
      *
@@ -240,5 +247,6 @@ val ServerFrame.seqOrZero: Long
         is ServerFrame.TaskDone -> seq
         is ServerFrame.Error -> seq ?: 0
         is ServerFrame.Chat -> seq
+        is ServerFrame.SessionClosed -> seq
         else -> 0
     }

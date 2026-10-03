@@ -12,7 +12,11 @@
 //	avisar   la que el agente llama para pedir atención del usuario.
 //	/hook    donde aterrizan los hooks de fin de tarea, que son comandos y no MCP.
 //
-// VERIFICAR: la forma exacta del transporte HTTP de MCP, el `protocolVersion` que espera el
+// SIN VERIFICAR CONTRA EL CLI REAL: lo de abajo implementa lo que documentan la especificación
+// de MCP (revisiones 2024-11-05, 2025-03-26 y 2025-06-18, transporte «streamable HTTP») y la
+// documentación del permission-prompt-tool de Claude Code, y está probado en mcp_test.go
+// contra esa documentación, no contra el binario. Falta confirmarlo con el CLI fijado
+// (docs/08-tareas.md). VERIFICAR: la forma exacta del transporte HTTP de MCP, el `protocolVersion` que espera el
 // CLI y el contrato de respuesta del permission-prompt-tool dependen de la versión fijada
 // del binario. Los tres puntos están marcados abajo. Es el mismo tipo de deriva que tenían
 // los VERIFICAR del adaptador en TypeScript, movido de sitio.
@@ -24,6 +28,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -45,6 +50,17 @@ func ArrancarMCP(anf Anfitrion) (*ServidorMCP, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /mcp", m.rpc)
+	// Streamable HTTP: el servidor puede no ofrecer el flujo GET de notificaciones, y debe
+	// contestar 405 en ese caso (así el cliente sabe que no hay y no reintenta). Idem DELETE
+	// (cierre de sesión MCP, que no mantenemos).
+	mux.HandleFunc("GET /mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "este servidor no ofrece flujo GET", http.StatusMethodNotAllowed)
+	})
+	mux.HandleFunc("DELETE /mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "sin sesiones MCP", http.StatusMethodNotAllowed)
+	})
 	mux.HandleFunc("POST /hook", m.hook)
 	m.servidor = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
@@ -105,7 +121,45 @@ type errorRPC struct {
 	Mensaje string `json:"message"`
 }
 
+// versionesMCP son las revisiones del protocolo que sabemos hablar, de más nueva a más
+// vieja. En `initialize` el cliente propone una: si la conocemos la devolvemos tal cual; si
+// no, respondemos con la nuestra más nueva y es el cliente quien decide si la acepta (spec
+// MCP, «Lifecycle / Version Negotiation»).
+var versionesMCP = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
+
+func negociarVersion(pedida string) string {
+	for _, v := range versionesMCP {
+		if v == pedida {
+			return v
+		}
+	}
+	return versionesMCP[0]
+}
+
+// origenLocal aplica la regla de seguridad del transporte streamable HTTP: si la petición
+// trae `Origin`, tiene que ser de loopback, o una página web cualquiera podría hablarle a
+// este servidor desde el navegador del usuario (DNS rebinding). El CLI no manda `Origin`.
+func origenLocal(r *http.Request) bool {
+	origen := r.Header.Get("Origin")
+	if origen == "" {
+		return true
+	}
+	u, err := url.Parse(origen)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return false
+}
+
 func (m *ServidorMCP) rpc(w http.ResponseWriter, r *http.Request) {
+	if !origenLocal(r) {
+		http.Error(w, "origen no permitido", http.StatusForbidden)
+		return
+	}
 	var pet peticionRPC
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&pet); err != nil {
 		http.Error(w, "json inválido", http.StatusBadRequest)
@@ -121,12 +175,18 @@ func (m *ServidorMCP) rpc(w http.ResponseWriter, r *http.Request) {
 	resp := respuestaRPC{JSONRPC: "2.0", ID: pet.ID}
 	switch pet.Metodo {
 	case "initialize":
-		// VERIFICAR: `protocolVersion` tiene que ser una que el CLI acepte.
+		// VERIFICAR: `protocolVersion` tiene que ser una que el CLI acepte; se negocia.
+		var p struct {
+			Version string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(pet.Params, &p)
 		resp.Resultado = map[string]any{
-			"protocolVersion": "2025-06-18",
+			"protocolVersion": negociarVersion(p.Version),
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "manos-libres", "version": "0.0.0"},
 		}
+	case "ping":
+		resp.Resultado = map[string]any{}
 	case "tools/list":
 		resp.Resultado = map[string]any{"tools": herramientas()}
 	case "tools/call":
@@ -222,11 +282,22 @@ func (m *ServidorMCP) permiso(ctx context.Context, args map[string]any) (any, er
 		return nil, err
 	}
 
-	veredicto := map[string]any{"behavior": "deny", "message": "el usuario lo denegó"}
-	if contiene(respuesta.OpcionIDs, "allow") || contiene(respuesta.OpcionIDs, "always") {
-		veredicto = map[string]any{"behavior": "allow", "updatedInput": input}
+	return contenidoJSON(veredictoPermiso(respuesta, input)), nil
+}
+
+// veredictoPermiso es el contrato del permission-prompt-tool según la documentación de
+// Claude Code: un JSON, dentro de un bloque de texto, con `{"behavior":"allow",
+// "updatedInput":{…}}` para permitir (`updatedInput` es obligatorio: si no se cambia nada,
+// el mismo input) o `{"behavior":"deny","message":"…"}` para denegar. Todo lo que no sea un
+// «sí» explícito deniega. SIN VERIFICAR contra el CLI real.
+func veredictoPermiso(r RespuestaDecision, input map[string]any) map[string]any {
+	if contiene(r.OpcionIDs, "allow") || contiene(r.OpcionIDs, "always") {
+		if input == nil {
+			input = map[string]any{}
+		}
+		return map[string]any{"behavior": "allow", "updatedInput": input}
 	}
-	return contenidoJSON(veredicto), nil
+	return map[string]any{"behavior": "deny", "message": "el usuario lo denegó"}
 }
 
 func (m *ServidorMCP) avisar(args map[string]any) (any, error) {

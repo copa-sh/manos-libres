@@ -57,6 +57,7 @@ reconectar, el nodo sepa qué ha oído ya el usuario y qué debe volver a narrar
 | `alert` | `pattern`, `message?`, `spoken?`, `sound?`, `source` | Llamar la atención. `source: 'agent'` cuando lo pidió el agente con `avisar`. |
 | `task.done` | `summary`, `spoken`, `costUsd?`, `durationMs?` | Fin de turno. Genera aviso siempre. |
 | `error` | `code`, `message` | Fallo recuperable o fatal. |
+| `session.closed` | `reason` | La sesión se cerró (`user`, `idle` o `shutdown`). Es el último frame de su flujo, que el nodo termina justo después. |
 | `pong` | — | Latido. |
 | `chat.message` | `chatId`, `from`, `text`, `sentAt` | Un mensaje directo entre tus dispositivos. No lleva `sessionId`: viaja por el canal de control. |
 

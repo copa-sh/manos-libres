@@ -13,18 +13,22 @@ real, y la app no se ha compilado nunca.
 
 Sin esto no hay producto, y lo demás se construye encima.
 
-- [ ] **Verificar el MCP de permisos** contra la versión fijada del CLI. Hoy el CLI marca el
+- [ ] **Verificar el MCP de permisos** *(implementado según la especificación MCP y la
+      documentación del CLI y probado en `mcp_test.go`, pero **sin verificar contra el CLI
+      real**: eso es lo que queda)*  contra la versión fijada del CLI. Hoy el CLI marca el
       servidor como `failed` y sigue adelante, así que nunca llega a pedir un permiso — y
       pedir permisos *es* la tercera función del producto. Tres puntos, los tres marcados con
       `VERIFICAR` en [`server/mcp.go`](../server/mcp.go): el `protocolVersion` del
       `initialize`, el transporte HTTP de MCP, y el contrato de respuesta del
       permission-prompt-tool (`behavior` allow/deny más el `updatedInput`).
-- [ ] **Fijar la versión del CLI** en el despliegue, y avisar al arrancar si la instalada no
-      es esa. No es celo: la documentación anuncia que `--bare` pasará a ser el defecto de
+- [x] **Fijar la versión del CLI** en el despliegue, y avisar al arrancar si la instalada no
+      es esa. *Hecho: `CLAUDE_VERSION` y `version.go`; falta poner el valor real al
+      desplegar.* No es celo: la documentación anuncia que `--bare` pasará a ser el defecto de
       `-p`, y en modo bare el CLI no lee las credenciales OAuth. El día que ocurra, un CLI
       más nuevo dejaría de usar la suscripción y empezaría a facturar por token en silencio,
       sin fallar. Ver la cabecera de [`server/claudecode.go`](../server/claudecode.go).
-- [ ] **Test de contrato del `stream-json`**: la forma del mensaje de usuario que se escribe
+- [x] **Test de contrato del `stream-json`** *(con muestras escritas a mano según la
+      documentación; sustituirlas por líneas grabadas del CLI fijado)*: la forma del mensaje de usuario que se escribe
       por stdin, y las de `system`, `stream_event`, `assistant` y `result`. Funciona hoy; el
       test existe para enterarnos el día que cambie, que es la deriva que ya tenía el
       adaptador en TypeScript.
@@ -34,21 +38,25 @@ Sin esto no hay producto, y lo demás se construye encima.
 - [x] **Chat entre dispositivos.** `POST /v1/chat` y el frame `chat.message` por el canal de
       control, con historial en `hello` ([decisión 11](07-decisiones.md#11--chat-entre-tus-dispositivos-por-el-canal-de-control)).
       Falta la pantalla en la app — ver H1 más abajo.
-- [ ] Cerrar sesiones: no hay endpoint para cerrar una, ni limpieza de las inactivas.
-- [ ] Comprobar que `Interrumpir` (SIGINT) termina el turno y **no** la sesión. Si la mata,
+- [x] Cerrar sesiones: no hay endpoint para cerrar una, ni limpieza de las inactivas.
+- [ ] Comprobar que `Interrumpir` (SIGINT) termina el turno y **no** la sesión. *Hecho a
+      medias: la semántica de la sesión está probada con un adaptador falso y con un `claude`
+      de shell (la sesión no se cierra, las decisiones pendientes se cancelan, y si el motor
+      muere se avisa); falta ver qué hace el CLI real con SIGINT.* Si la mata,
       usar la capacidad `interrupt_receipt_v1` que el CLI anuncia en su `system/init`.
-- [ ] Emitir la fase `end` de las herramientas y su `ok`. Hoy solo sale `start`, porque no se
+- [x] Emitir la fase `end` de las herramientas y su `ok`. Hoy solo sale `start`, porque no se
       procesan los `tool_result` que llegan en los mensajes `user`.
-- [ ] Deduplicar `session.state`: en una traza real llegan tres `idle` seguidos, gastando
+- [x] Deduplicar `session.state`: en una traza real llegan tres `idle` seguidos, gastando
       `seq` y un frame cada uno.
-- [ ] Reanudar con `--resume` al reabrir una sesión tras reiniciar el nodo. El
+- [x] Reanudar con `--resume` al reabrir una sesión tras reiniciar el nodo. El
       `engineSessionId` ya se guarda; no lo usa nadie.
-- [ ] Límite de tasa y de conexiones por token. [05-seguridad.md](05-seguridad.md) lo promete
+- [x] Límite de tasa y de conexiones por token. [05-seguridad.md](05-seguridad.md) lo promete
       y el código no lo cumple.
-- [ ] Tests del transporte: SSE, reanudación por `Last-Event-ID`, autenticación. Hoy solo hay
+- [x] Tests del transporte: SSE, reanudación por `Last-Event-ID`, autenticación. Hoy solo hay
       de sesión y de narrable.
-- [ ] CI: `gofmt -l`, `go vet` y `go test`. Y añadir `go.sum` en cuanto entre la primera
-      dependencia — el `Dockerfile` lo tiene comentado a la espera.
+- [x] CI: `.github/workflows/server.yml` con `gofmt -l`, `go vet` y `go test -race`. Queda
+      añadir `go.sum` en cuanto entre la primera dependencia — el `Dockerfile` lo tiene
+      comentado a la espera.
 
 ## H1 · App mínima
 

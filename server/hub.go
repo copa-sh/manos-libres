@@ -8,7 +8,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +42,15 @@ type Hub struct {
 	// Suscriptores del canal de control. Reciben `session.list` y los frames de despertar.
 	control map[Suscriptor]bool
 
+	// Cómo se construye el adaptador de una sesión nueva. Es un campo para que los tests
+	// puedan poner uno falso sin el CLI.
+	nuevoAdaptador func() Adaptador
+
+	// Sesiones conocidas para reanudar (abiertas y cerradas), y dónde se guardan.
+	almacen    *Almacen
+	registros  map[string]RegistroSesion
+	persistirM sync.Mutex
+
 	chatMu     sync.Mutex
 	chatBuffer []*Chat
 	chatSeq    int64
@@ -53,6 +65,22 @@ func NuevoHub(ctx context.Context, cfg Config) *Hub {
 		sigID:    1,
 		control:  map[Suscriptor]bool{},
 		sigChat:  1,
+
+		nuevoAdaptador: func() Adaptador { return NuevoAdaptadorClaudeCode(cfg) },
+		almacen:        NuevoAlmacen(cfg.FicheroEstado),
+		registros:      map[string]RegistroSesion{},
+	}
+	if regs, err := h.almacen.Cargar(); err != nil {
+		log.Printf("aviso: no se pudo leer %s: %v", cfg.FicheroEstado, err)
+	} else {
+		h.registros = regs
+		// Los ids no se reutilizan entre ejecuciones: `s_3` de ayer no es `s_3` de hoy.
+		for id := range regs {
+			var n int
+			if _, err := fmt.Sscanf(id, "s_%d", &n); err == nil && n >= h.sigID {
+				h.sigID = n + 1
+			}
+		}
 	}
 	// La sesión no conoce al hub; le pasamos por dónde difundir.
 	difundir = h.Difundir
@@ -84,8 +112,37 @@ func (h *Hub) Listar() []InfoSesion {
 	return infos
 }
 
-// Abrir crea una sesión y arranca su adaptador.
-func (h *Hub) Abrir(cwd, titulo string) (*Sesion, error) {
+// Errores de Abrir que el transporte traduce a un código HTTP.
+var (
+	ErrNoReanudable = errors.New("no hay una sesión cerrada con ese id que se pueda reanudar")
+	ErrYaAbierta    = errors.New("esa sesión sigue abierta")
+	ErrNoSesion     = errors.New("no existe esa sesión")
+)
+
+// Abrir crea una sesión y arranca su adaptador. Si `reanudarDe` no está vacío es el id de
+// una sesión anterior (de `resumable` en `GET /v1/sesiones`): la nueva arranca con
+// `--resume` del id de motor que se guardó, en el cwd de aquella.
+func (h *Hub) Abrir(cwd, titulo, reanudarDe string) (*Sesion, error) {
+	var idMotor string
+	if reanudarDe != "" {
+		h.mu.Lock()
+		reg, ok := h.registros[reanudarDe]
+		abierta := h.sesiones[reanudarDe] != nil
+		h.mu.Unlock()
+		switch {
+		case abierta:
+			return nil, ErrYaAbierta
+		case !ok || reg.IdMotor == "":
+			return nil, ErrNoReanudable
+		}
+		idMotor = reg.IdMotor
+		if cwd == "" {
+			cwd = reg.Cwd
+		}
+		if titulo == "" {
+			titulo = reg.Titulo
+		}
+	}
 	if !h.cfg.RaizPermitida(cwd) {
 		return nil, fmt.Errorf("%s no está bajo ALLOWED_ROOTS", cwd)
 	}
@@ -93,7 +150,9 @@ func (h *Hub) Abrir(cwd, titulo string) (*Sesion, error) {
 	h.mu.Lock()
 	id := fmt.Sprintf("s_%d", h.sigID)
 	h.sigID++
-	s := NuevaSesion(id, NuevoAdaptadorClaudeCode(h.cfg), cwd, titulo, h.cfg.BufferReplay)
+	s := NuevaSesion(id, h.nuevoAdaptador(), cwd, titulo, h.cfg.BufferReplay)
+	s.reanudar = idMotor
+	s.alMotor = h.persistir
 	h.sesiones[id] = s
 	h.orden = append(h.orden, id)
 	h.mu.Unlock()
@@ -104,8 +163,142 @@ func (h *Hub) Abrir(cwd, titulo string) (*Sesion, error) {
 		h.mu.Unlock()
 		return nil, err
 	}
+	if reanudarDe != "" {
+		// El motor es el mismo: la entrada vieja pasa a ser la nueva.
+		h.mu.Lock()
+		delete(h.registros, reanudarDe)
+		h.mu.Unlock()
+	}
+	h.persistir()
 	h.AnunciarLista()
 	return s, nil
+}
+
+// CerrarSesion cierra una sesión y la saca del inventario. La entrada para reanudarla se
+// conserva.
+func (h *Hub) CerrarSesion(id, motivo string) error {
+	h.mu.Lock()
+	s := h.sesiones[id]
+	if s == nil {
+		h.mu.Unlock()
+		return ErrNoSesion
+	}
+	delete(h.sesiones, id)
+	for i, o := range h.orden {
+		if o == id {
+			h.orden = append(h.orden[:i:i], h.orden[i+1:]...)
+			break
+		}
+	}
+	h.mu.Unlock()
+
+	err := s.CerrarPor(motivo)
+	h.registrar(s, false)
+	h.persistir()
+	h.AnunciarLista()
+	return err
+}
+
+// LimpiarInactivas cierra las sesiones ociosas desde antes de `limite` (ver Sesion.Inactiva)
+// y devuelve cuántas.
+func (h *Hub) LimpiarInactivas(limite time.Time) int {
+	h.mu.Lock()
+	var ids []string
+	for _, id := range h.orden {
+		if s := h.sesiones[id]; s != nil && s.Inactiva(limite) {
+			ids = append(ids, id)
+		}
+	}
+	h.mu.Unlock()
+
+	n := 0
+	for _, id := range ids {
+		if h.CerrarSesion(id, "idle") == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// IniciarLimpieza revisa cada minuto las sesiones inactivas hasta que muera `ctx`.
+func (h *Hub) IniciarLimpieza(ctx context.Context) {
+	if h.cfg.InactividadMinutos <= 0 {
+		return
+	}
+	go func() {
+		tic := time.NewTicker(time.Minute)
+		defer tic.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tic.C:
+				limite := time.Now().Add(-time.Duration(h.cfg.InactividadMinutos) * time.Minute)
+				if n := h.LimpiarInactivas(limite); n > 0 {
+					log.Printf("cerradas %d sesiones inactivas", n)
+				}
+			}
+		}
+	}()
+}
+
+// registrar actualiza la entrada reanudable de una sesión. Si el motor aún no publicó id no
+// hay nada que reanudar y no se guarda.
+func (h *Hub) registrar(s *Sesion, abierta bool) {
+	idMotor := s.IdMotor()
+	if idMotor == "" {
+		return
+	}
+	info := s.Info()
+	h.mu.Lock()
+	h.registros[s.SessionID] = RegistroSesion{SessionID: s.SessionID, Titulo: info.Titulo,
+		Cwd: s.Cwd, Motor: s.Motor, IdMotor: idMotor, Editado: info.Editado, Abierta: abierta}
+	h.mu.Unlock()
+}
+
+// persistir vuelca al disco las sesiones abiertas y las reanudables.
+func (h *Hub) persistir() {
+	if h.almacen == nil || h.cfg.FicheroEstado == "" {
+		return
+	}
+	h.persistirM.Lock()
+	defer h.persistirM.Unlock()
+
+	h.mu.Lock()
+	vivas := make([]*Sesion, 0, len(h.sesiones))
+	for _, s := range h.sesiones {
+		vivas = append(vivas, s)
+	}
+	h.mu.Unlock()
+	for _, s := range vivas {
+		h.registrar(s, true)
+	}
+
+	h.mu.Lock()
+	copia := make(map[string]RegistroSesion, len(h.registros))
+	for k, v := range h.registros {
+		copia[k] = v
+	}
+	h.mu.Unlock()
+	if err := h.almacen.Guardar(copia); err != nil {
+		log.Printf("aviso: no se pudo guardar %s: %v", h.cfg.FicheroEstado, err)
+	}
+}
+
+// Reanudables lista las sesiones cerradas que se pueden reabrir con `resume`, las más
+// recientes primero.
+func (h *Hub) Reanudables() []RegistroSesion {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := []RegistroSesion{}
+	for id, r := range h.registros {
+		if h.sesiones[id] == nil && r.IdMotor != "" {
+			r.Abierta = false
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Editado > out[j].Editado })
+	return out
 }
 
 // ── Canal de control ────────────────────────────────────────────────────────────────────
@@ -192,7 +385,10 @@ func (h *Hub) HistorialChat() []*Chat {
 	return out
 }
 
+// Cerrar apaga el nodo: cierra todas las sesiones, dejando guardadas las reanudables.
 func (h *Hub) Cerrar() {
+	h.persistir()
+
 	h.mu.Lock()
 	sesiones := make([]*Sesion, 0, len(h.sesiones))
 	for _, s := range h.sesiones {
@@ -203,6 +399,8 @@ func (h *Hub) Cerrar() {
 	h.mu.Unlock()
 
 	for _, s := range sesiones {
-		_ = s.Cerrar()
+		_ = s.CerrarPor("shutdown")
+		h.registrar(s, false)
 	}
+	h.persistir()
 }

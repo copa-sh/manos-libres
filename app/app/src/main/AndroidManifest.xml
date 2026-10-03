@@ -9,6 +9,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Que una decisión llegue a pantalla completa con el móvil bloqueado. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Sin push por un tercero, la exención de Doze es parte de la entrega (docs/07 §3). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Visibilidad de paquetes (Android 11+): sin esto TextToSpeech no encuentra ningún motor. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
 
     <application
         android:label="@string/app_name"
@@ -22,6 +31,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Emparejamiento por enlace: manoslibres://pair?url=...&token=... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="manoslibres" android:host="pair" />
             </intent-filter>
         </activity>
 
@@ -53,7 +69,7 @@
             android:theme="@style/Theme.ManosLibres.Decision" />
 
         <!--
-            Mantiene el WebSocket y la narración con la pantalla bloqueada. Se declara como
+            Mantiene el canal con el nodo y la narración con la pantalla bloqueada. Se declara como
             reproducción de medios porque narrar es reproducir audio: así el sistema lo
             respeta y la narración aparece en los controles de la pantalla de bloqueo.
         -->
@@ -62,7 +78,13 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
-        <!-- TODO(H2): receptor de push (FirebaseMessagingService o UnifiedPush). -->
+        <!--
+            Las acciones de la notificación de decisión: contestar desde la pantalla de
+            bloqueo. No exportado: solo lo dispara el PendingIntent de la propia app.
+        -->
+        <receiver
+            android:name=".session.DecisionReceiver"
+            android:exported="false" />
 
     </application>
 </manifest>
